@@ -1,0 +1,237 @@
+---
+title: "Practical Machine Learning Project"
+output:
+  html_document:
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+---
+
+
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+
+In this project, the participants were instructed to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.
+
+
+##Data 
+
+The data for this project is provided by Groupware@LES, in their [Human Activity Report][1].
+
+The training dataset for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test dataset are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+####Loading Data
+
+```{r load_data}
+trainingset <- read.csv('./dataset/pml-training.csv', na.strings=c('','NA','#DIV/0!'))
+
+predictors <- colnames(trainingset)
+predictors # all variables / columns
+```
+
+####Loading Libraries
+```{r load_libraries}
+library(caret)
+library(rattle)
+
+set.seed(1001)
+```
+
+##Data Preparation
+
+In data preparation, we split the **training dataset** into `.train` and `.test` for evaluating the model and estimate out of sample error later on. We also clean the data in order to narrow down the predictors.
+
+
+#####1. Data Partitioning 
+
+```{r data_partition, results='hold'}
+# Data Partitioning
+inTrain <- createDataPartition(trainingset$classe, p=.75, list=FALSE)
+trainingset.train <- trainingset[ inTrain, ]; dim(trainingset.train)
+trainingset.test  <- trainingset[-inTrain, ]; dim(trainingset.test)
+```
+
+
+#####2. Remove Non-Predictors
+
+We remove variables that we judged as non-predictors, i.e. variables that are judged as non consequential to the variable of interest.
+
+```{r cleaning_non_predictors}
+# Remove all non-predictors as judged:
+# row index, user name, timestamp(s)
+trainingset.train <- trainingset.train[, -c(1:5)]
+```
+
+#####2. Remove NA
+
+```{r cleaning_NA}
+# Function to calculate NA proportion
+na.prop <- function(x) { return( sum(is.na(x))/length(x) ) }
+
+# Find columns with NA more than 50% (my threshold)
+na.vars <- apply(trainingset.train, 2, na.prop) > 0.5
+
+# Get all the column names above NA threshold of 50%
+column.names <- names(na.vars)
+na.columns   <- column.names[na.vars]
+
+# Remove the NZV columns from the predictors
+na.excluded <- names(trainingset.train) %in% na.columns
+trainingset.train <- trainingset.train[!na.excluded]
+dim(trainingset.train)
+```
+
+#####3. Remove Near Zero Variables (NZV)
+
+```{r cleaning_near_zero_vars}
+# Calculate Near Zero Vars (NZV)
+nzv.vars <- nearZeroVar(trainingset.train, saveMetrics=TRUE)
+
+# Get all the column names of NZV
+column.names <- row.names(nzv.vars)
+nzv.columns  <- column.names[nzv.vars$nzv]
+
+# Remove the NZV columns from the predictors
+nzv.excluded <- names(trainingset.train) %in% nzv.columns
+trainingset.train <- trainingset.train[!nzv.excluded]
+dim(trainingset.train)
+```
+
+
+##Model Training
+
+We choose **Random Forest** model after comparison with few other models (one comparison model, i.e. Decision Tree, is shown in Appendix C). The model is used with **Repeated Cross Validation** using default **10-fold** value.
+
+```{r training, cache=TRUE}
+# K-fold Cross Validation, default = 10-fold
+ctrl <- trainControl(method='repeatedcv', repeats=3)
+
+# Training with Random Forest Model
+model.rf <- train(classe ~ . ,
+                  data=trainingset.train,
+                  method='rf',
+                  ntree=100,
+                  trControl=ctrl)
+model.rf$finalModel # training result
+```
+
+
+##Prediction Using `.test` Dataset
+
+#####Prediction
+
+```{r predicting}
+# Apply transformations (i.e. cleaning of data) to trainingset.test
+trainingset.test <- trainingset.test[, names(trainingset.train)]
+
+# Prediction of trainingset.test dataset
+predict.rf <- predict(model.rf, newdata=trainingset.test)
+cm.rf <- confusionMatrix(predict.rf, trainingset.test$classe)
+cm.rf  # prediction result
+```
+
+#####Accuracy and Out Of Sample Error
+
+The Accuracy in the above model > 90%, hence we expect Out Of Sample Error to be less than 1%. As the Accuracy is defined as (TP+TF/N), the error for the test data can be estimated as follow:
+
+
+```{r outofsample_error}
+outofsample_error <- 1 - cm.rf$overall['Accuracy']
+```
+
+Hence, the estimated out of sample error = `r sprintf("%.2f %%", 100*outofsample_error)`.
+
+
+##Appendix
+
+####A. Variables/Columns Removed as Predictors
+
+#####1. Non-Predictors
+
+`r names(trainingset)[1:5]`
+
+#####2. Variables with NA Above 50% Threshold - removed after Step 1
+
+`r na.columns`
+
+#####3. Variables as Near Zero Value (NZV) - removed after Step 1, 2
+
+`r nzv.columns`
+
+
+####B. Final Variables/Columns Used as Predictors
+
+`r n <- names(trainingset.train); n[n != 'classe']`
+
+
+####C. Comparison to other model (Decision Tree)
+
+```{r decision_tree}
+# Training with Decision Tree Model
+model.dt <- train(classe ~ . ,
+                  data=trainingset.train,
+                  method='rpart',
+                  trControl=ctrl)
+
+# Plot Decision Tree Model result
+fancyRpartPlot(model.dt$finalModel)
+
+# Prediction of trainingset.test dataset
+predict.dt <- predict(model.dt, newdata=trainingset.test)
+cm.dt <- confusionMatrix(predict.dt, trainingset.test$classe)
+cm.dt  # prediction result
+```
+
+```{r comparison_plots}
+par(mfrow=c(1,2))
+
+plotcolors <- as.integer(unique(trainingset$classe)) + 5
+
+# Plot Random Forest result
+plot(cm.rf$table, col=plotcolors, main='Random Forest', sub=sprintf("(Accuracy=%.2f %%)", cm.rf$overall['Accuracy']*100))
+
+# Plot Decision Tree result
+plot(cm.dt$table, col=plotcolors, main='Decision Tree', sub=sprintf("(Accuracy=%.2f %%)", cm.dt$overall['Accuracy']*100))
+```
+
+
+
+####D. Generating Submission File
+
+```{r submission_code}
+# File Generation Function -- provided in Coursera
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+# Read Test Dataset
+testingset <- read.csv('./dataset/pml-testing.csv', na.strings=c('','NA','#DIV/0!'))
+
+# Select the same variables/columns as predictors
+n <- names(trainingset.train)
+testingset <- testingset[, n[n!='classe'] ]
+
+# Apply Random Forest Model
+testingset.result <- predict(model.rf, newdata=testingset)
+testingset.result
+
+# Generate answer files
+pml_write_files(testingset.result)
+```
+
+
+[1]: http://groupware.les.inf.puc-rio.br/har
